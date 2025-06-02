@@ -1,60 +1,32 @@
-const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
-
-// Create uploads directory if it doesn't exist
-const uploadsDir = path.join(__dirname, "../../uploads");
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir);
-}
-
-// Configure multer for file upload
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadsDir);
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(
-      null,
-      file.fieldname + "-" + uniqueSuffix + path.extname(file.originalname)
-    );
-  },
-});
-
-// File filter
-const fileFilter = (req, file, cb) => {
-  const allowedTypes = ["image/jpeg", "image/png", "image/gif"];
-  if (allowedTypes.includes(file.mimetype)) {
-    cb(null, true);
-  } else {
-    cb(
-      new Error("Invalid file type. Only JPEG, PNG and GIF are allowed."),
-      false
-    );
-  }
-};
-
-const upload = multer({
-  storage: storage,
-  fileFilter: fileFilter,
-  limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB limit
-  },
-});
+const { upload, cloudinary } = require("../config/cloudinary");
 
 const fileService = {
-  upload: upload,
+  // Export the upload middleware directly
+  upload,
 
-  deleteFile: (filename) => {
-    const filepath = path.join(uploadsDir, filename);
-    if (fs.existsSync(filepath)) {
-      fs.unlinkSync(filepath);
-    }
+  // Get the URL of an uploaded file
+  getFileUrl: (path) => {
+    console.log("Getting file URL for path:", path);
+    // For Cloudinary, the path is already the URL
+    return path;
   },
 
-  getFileUrl: (filename) => {
-    return `${process.env.BACKEND_URL}/uploads/${filename}`;
+  // Delete a file
+  deleteFile: async (publicId) => {
+    try {
+      console.log("Attempting to delete file with publicId:", publicId);
+      // Extract public_id from URL if a full URL is provided
+      const public_id = publicId.includes("cloudinary")
+        ? publicId.split("/").slice(-2).join("/").split(".")[0]
+        : publicId;
+
+      console.log("Extracted public_id:", public_id);
+      await cloudinary.uploader.destroy(public_id);
+      console.log("Successfully deleted file from Cloudinary");
+    } catch (error) {
+      console.error("Error deleting file from Cloudinary:", error);
+      throw error;
+    }
   },
 };
 

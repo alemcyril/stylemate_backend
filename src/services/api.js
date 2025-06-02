@@ -70,12 +70,12 @@ api.interceptors.response.use(
 
 // Auth endpoints
 export const auth = {
-  register: (userData) => api.post("/auth/register", userData),
-  login: (credentials) => api.post("/auth/login", credentials),
-  logout: () => api.post("/auth/logout"),
-  getProfile: () => api.get("/auth/profile"),
-  updateProfile: (data) => api.put("/auth/profile", data),
-  changePassword: (data) => api.put("/auth/change-password", data),
+  register: (userData) => api.post("/api/auth/signup", userData),
+  login: (credentials) => api.post("/api/auth/login", credentials),
+  logout: () => api.post("/api/auth/logout"),
+  getProfile: () => api.get("/api/auth/profile"),
+  updateProfile: (data) => api.put("/api/auth/profile", data),
+  changePassword: (data) => api.put("/api/auth/change-password", data),
 };
 
 // Wardrobe endpoints

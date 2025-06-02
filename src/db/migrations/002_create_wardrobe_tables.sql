@@ -26,6 +26,10 @@ CREATE TABLE IF NOT EXISTS outfits (
     name VARCHAR(100) NOT NULL,
     description TEXT,
     image_url VARCHAR(255),
+    occasion VARCHAR(50),
+    season VARCHAR(50),
+    is_favorite BOOLEAN DEFAULT FALSE,
+    saved_for_later BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );

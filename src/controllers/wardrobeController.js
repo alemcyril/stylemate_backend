@@ -23,54 +23,129 @@ const wardrobeController = {
   // Get wardrobe statistics
   getStats: async (req, res) => {
     try {
-      const stats = await pool.query(
-        `SELECT 
-          COUNT(*) as total_items,
-          COUNT(DISTINCT category_id) as total_categories,
-          COUNT(DISTINCT color) as total_colors,
-          COUNT(DISTINCT brand) as total_brands
-         FROM wardrobe_items 
-         WHERE user_id = $1`,
+      // Get all wardrobe items with their categories
+      const itemsResult = await pool.query(
+        `SELECT wi.*, c.name as category_name
+         FROM wardrobe_items wi
+         LEFT JOIN categories c ON wi.category_id = c.id
+         WHERE wi.user_id = $1`,
         [req.user.id]
       );
 
-      const categoryStats = await pool.query(
-        `SELECT c.name, COUNT(wi.id) as count
-         FROM categories c
-         LEFT JOIN wardrobe_items wi ON c.id = wi.category_id AND wi.user_id = $1
-         GROUP BY c.id, c.name`,
-        [req.user.id]
+      const items = itemsResult.rows;
+
+      // Calculate category distribution
+      const categoryCount = {};
+      items.forEach((item) => {
+        const category = item.category_name?.toLowerCase() || "uncategorized";
+        categoryCount[category] = (categoryCount[category] || 0) + 1;
+      });
+      const categoryDistribution = Object.entries(categoryCount).map(
+        ([category, count]) => ({
+          category: category.charAt(0).toUpperCase() + category.slice(1),
+          count,
+        })
+      );
+
+      // Calculate color distribution
+      const colorCount = {};
+      items.forEach((item) => {
+        const color = item.color?.toLowerCase() || "other";
+        colorCount[color] = (colorCount[color] || 0) + 1;
+      });
+      const colorDistribution = Object.entries(colorCount).map(
+        ([color, count]) => ({
+          color: color.charAt(0).toUpperCase() + color.slice(1),
+          count,
+        })
+      );
+
+      // Calculate season distribution
+      const seasonCount = {};
+      items.forEach((item) => {
+        const seasons = item.seasons || [];
+        seasons.forEach((season) => {
+          seasonCount[season] = (seasonCount[season] || 0) + 1;
+        });
+      });
+      const seasonDistribution = Object.entries(seasonCount).map(
+        ([season, count]) => ({
+          season: season.charAt(0).toUpperCase() + season.slice(1),
+          count,
+        })
       );
 
       res.json({
-        overall: stats.rows[0],
-        byCategory: categoryStats.rows,
+        categoryDistribution,
+        colorDistribution,
+        seasonDistribution,
+        totalItems: items.length,
       });
     } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Server error" });
+      console.error("Error getting wardrobe stats:", error);
+      res.status(500).json({ message: "Failed to get wardrobe statistics" });
     }
   },
 
   // Add a new wardrobe item
   addItem: async (req, res) => {
     const { name, category_id, description, color, brand } = req.body;
-    const imageUrl = req.file
-      ? fileService.getFileUrl(req.file.filename)
-      : null;
+
+    // Log the file details from multer
+    console.log("Uploaded file details:", {
+      file: req.file,
+      path: req.file?.path,
+      filename: req.file?.filename,
+      originalname: req.file?.originalname,
+      mimetype: req.file?.mimetype,
+      size: req.file?.size,
+    });
+
+    if (!req.file) {
+      return res.status(400).json({ message: "No image file uploaded" });
+    }
+
+    const imageUrl = fileService.getFileUrl(req.file.path);
+    console.log("Generated image URL:", imageUrl);
 
     try {
-      const result = await pool.query(
-        `INSERT INTO wardrobe_items 
-         (user_id, category_id, name, description, image_url, color, brand)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING *`,
-        [req.user.id, category_id, name, description, imageUrl, color, brand]
-      );
-      res.status(201).json(result.rows[0]);
+      // Start a transaction
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+
+        // Get category ID from name
+        const categoryResult = await client.query(
+          "SELECT id FROM categories WHERE LOWER(name) = LOWER($1)",
+          [category_id]
+        );
+
+        if (categoryResult.rows.length === 0) {
+          throw new Error("Invalid category");
+        }
+
+        const categoryId = categoryResult.rows[0].id;
+
+        // Create the wardrobe item
+        const result = await client.query(
+          `INSERT INTO wardrobe_items 
+           (user_id, category_id, name, description, image_url, color, brand)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           RETURNING *`,
+          [req.user.id, categoryId, name, description, imageUrl, color, brand]
+        );
+
+        await client.query("COMMIT");
+        res.status(201).json(result.rows[0]);
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
     } catch (error) {
-      console.error(error);
-      res.status(500).json({ message: "Server error" });
+      console.error("Error adding wardrobe item:", error);
+      res.status(500).json({ message: error.message || "Server error" });
     }
   },
 
@@ -78,9 +153,7 @@ const wardrobeController = {
   updateItem: async (req, res) => {
     const { id } = req.params;
     const { name, category_id, description, color, brand } = req.body;
-    const imageUrl = req.file
-      ? fileService.getFileUrl(req.file.filename)
-      : null;
+    const imageUrl = req.file ? fileService.getFileUrl(req.file.path) : null;
 
     try {
       // Get the current item to check ownership

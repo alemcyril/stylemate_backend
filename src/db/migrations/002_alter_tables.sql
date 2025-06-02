@@ -23,6 +23,11 @@ BEGIN
                   WHERE table_name = 'outfits' AND column_name = 'is_favorite') THEN
         ALTER TABLE outfits ADD COLUMN is_favorite BOOLEAN DEFAULT FALSE;
     END IF;
+    
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                  WHERE table_name = 'outfits' AND column_name = 'saved_for_later') THEN
+        ALTER TABLE outfits ADD COLUMN saved_for_later BOOLEAN DEFAULT FALSE;
+    END IF;
 END $$;
 
 -- Create weather_preferences table if it doesn't exist

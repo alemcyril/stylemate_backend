@@ -2,7 +2,7 @@
 node_modules/
 
 # Ignore environment variables file
-.env
+# .env
 
 # Ignore log files
 npm-debug.log

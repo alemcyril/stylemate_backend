@@ -14,62 +14,153 @@ const userController = {
 
       const { email, password, username } = req.body;
 
-      // Validate input
-      if (!email || !password || !username) {
+      // Input sanitization and validation
+      const sanitizedEmail = email?.trim().toLowerCase();
+      const sanitizedUsername = username?.trim();
+
+      // Comprehensive input validation
+      if (!sanitizedEmail || !password || !sanitizedUsername) {
         return res.status(400).json({
-          error: "Email, password, and username are required",
+          status: "error",
+          error: "Missing required fields",
+          details: {
+            email: !sanitizedEmail ? "Email is required" : null,
+            password: !password ? "Password is required" : null,
+            username: !sanitizedUsername ? "Username is required" : null,
+          },
         });
       }
 
-      // Check if user already exists with a lock
-      const existingUser = await client.query(
-        "SELECT * FROM users WHERE email = $1 OR username = $2 FOR UPDATE",
-        [email, username]
+      // Email format validation
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(sanitizedEmail)) {
+        return res.status(400).json({
+          status: "error",
+          error: "Invalid email format",
+        });
+      }
+
+      // Username format validation
+      const usernameRegex = /^[a-zA-Z0-9_]{3,30}$/;
+      if (!usernameRegex.test(sanitizedUsername)) {
+        return res.status(400).json({
+          status: "error",
+          error:
+            "Username must be 3-30 characters long and can only contain letters, numbers, and underscores",
+        });
+      }
+
+      // Check for existing user with detailed error message
+      const existingUserQuery = await client.query(
+        `SELECT email, username FROM users 
+         WHERE email = $1 OR username = $2`,
+        [sanitizedEmail, sanitizedUsername]
       );
 
-      if (existingUser.rows.length > 0) {
+      if (existingUserQuery.rows.length > 0) {
+        const existingUser = existingUserQuery.rows[0];
         await client.query("ROLLBACK");
         return res.status(400).json({
-          error: "Email or username already exists",
+          status: "error",
+          error: "Account already exists",
+          details: {
+            email:
+              existingUser.email === sanitizedEmail
+                ? "Email is already registered"
+                : null,
+            username:
+              existingUser.username === sanitizedUsername
+                ? "Username is already taken"
+                : null,
+          },
         });
       }
 
-      // Hash password
-      const salt = await bcrypt.genSalt(10);
-      const hashedPassword = await bcrypt.hash(password, salt);
+      // Password strength validation
+      if (password.length < 6) {
+        return res.status(400).json({
+          status: "error",
+          error: "Password must be at least 6 characters long",
+        });
+      }
 
-      // Create user (without verification token)
-      const result = await client.query(
-        "INSERT INTO users (email, password, username, is_verified) VALUES ($1, $2, $3, true) RETURNING id, email, username",
-        [email, hashedPassword, username]
-      );
+      if (!/\d/.test(password) || !/[a-zA-Z]/.test(password)) {
+        return res.status(400).json({
+          status: "error",
+          error: "Password must contain at least one letter and one number",
+        });
+      }
 
-      const user = result.rows[0];
+      // Hash password with error handling
+      let hashedPassword;
+      try {
+        const salt = await bcrypt.genSalt(10);
+        hashedPassword = await bcrypt.hash(password, salt);
+      } catch (error) {
+        await client.query("ROLLBACK");
+        console.error("Password hashing error:", error);
+        return res.status(500).json({
+          status: "error",
+          error: "Error processing password",
+        });
+      }
 
-      await client.query("COMMIT");
+      // Create user with error handling
+      try {
+        // Generate verification token
+        const verificationToken = crypto.randomBytes(32).toString("hex");
 
-      res.status(201).json({
-        message: "User created successfully.",
-        user: {
-          id: user.id,
-          email: user.email,
-          username: user.username,
-        },
-      });
+        const result = await client.query(
+          `INSERT INTO users (
+            email, 
+            password, 
+            username, 
+            verification_token,
+            created_at
+          ) VALUES ($1, $2, $3, $4, NOW()) 
+          RETURNING id, email, username, created_at, is_verified`,
+          [sanitizedEmail, hashedPassword, sanitizedUsername, verificationToken]
+        );
+
+        const user = result.rows[0];
+        await client.query("COMMIT");
+
+        // Generate tokens for immediate login
+        const accessToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
+          expiresIn: "15m",
+        });
+        const refreshToken = jwt.sign({ id: user.id }, process.env.JWT_SECRET, {
+          expiresIn: "7d",
+        });
+
+        // TODO: Send verification email with verificationToken
+        // This should be implemented in an email service
+
+        res.status(201).json({
+          accessToken,
+          refreshToken,
+          user: {
+            id: user.id,
+            email: user.email,
+            username: user.username,
+            created_at: user.created_at,
+            is_verified: user.is_verified,
+          },
+        });
+      } catch (error) {
+        await client.query("ROLLBACK");
+        console.error("User creation error:", error);
+        return res.status(500).json({
+          status: "error",
+          error: "Failed to create account",
+        });
+      }
     } catch (error) {
       await client.query("ROLLBACK");
       console.error("Signup error:", error);
-
-      // Handle specific database errors
-      if (error.code === "23505") {
-        // Unique violation
-        return res.status(400).json({
-          error: "Email or username already exists",
-        });
-      }
-
       res.status(500).json({
-        error: "An error occurred during signup. Please try again later.",
+        status: "error",
+        error: "An unexpected error occurred. Please try again later.",
       });
     } finally {
       client.release();
@@ -162,6 +253,10 @@ const userController = {
   refreshToken: async (req, res) => {
     const { refreshToken } = req.body;
 
+    if (!refreshToken) {
+      return res.status(400).json({ message: "Refresh token is required" });
+    }
+
     try {
       const decoded = jwt.verify(refreshToken, process.env.JWT_SECRET);
       const user = await userModel.findById(decoded.id);
@@ -170,9 +265,21 @@ const userController = {
         return res.status(401).json({ message: "Invalid refresh token" });
       }
 
+      // Generate new tokens
       const tokens = userModel.generateTokens(user);
-      res.json(tokens);
+
+      // Return both tokens
+      res.json({
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        user: {
+          id: user.id,
+          username: user.username,
+          email: user.email,
+        },
+      });
     } catch (error) {
+      console.error("Token refresh error:", error);
       res.status(401).json({ message: "Invalid refresh token" });
     }
   },
