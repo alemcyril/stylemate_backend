@@ -572,28 +572,33 @@ const outfitController = {
   getSavedOutfits: async (req, res) => {
     try {
       const result = await pool.query(
-        `SELECT so.*, 
-         json_agg(
-           CASE 
-             WHEN wi.id IS NOT NULL THEN
-               json_build_object(
-                 'id', wi.id,
-                 'name', wi.name,
-                 'image_url', wi.image_url,
-                 'category_name', c.name
-               )
-             ELSE NULL
-           END
-         ) FILTER (WHERE wi.id IS NOT NULL) as items,
-         o.image_url as outfit_image
-         FROM saved_outfits so
-         LEFT JOIN outfits o ON so.outfit_id = o.id
-         LEFT JOIN outfit_items oi ON so.outfit_id = oi.outfit_id
-         LEFT JOIN wardrobe_items wi ON oi.wardrobe_item_id = wi.id
-         LEFT JOIN categories c ON wi.category_id = c.id
-         WHERE so.user_id = $1
-         GROUP BY so.id, o.image_url
-         ORDER BY so.saved_at DESC`,
+        `WITH outfit_items_data AS (
+          SELECT 
+            oi.outfit_id,
+            json_agg(
+              json_build_object(
+                'id', wi.id,
+                'name', wi.name,
+                'image_url', wi.image_url,
+                'category_name', c.name
+              )
+            ) as items
+          FROM outfit_items oi
+          JOIN wardrobe_items wi ON oi.wardrobe_item_id = wi.id
+          LEFT JOIN categories c ON wi.category_id = c.id
+          GROUP BY oi.outfit_id
+        )
+        SELECT 
+          so.*,
+          o.name as outfit_name,
+          o.description as outfit_description,
+          o.image_url as outfit_image,
+          oid.items
+        FROM saved_outfits so
+        JOIN outfits o ON so.outfit_id = o.id
+        LEFT JOIN outfit_items_data oid ON o.id = oid.outfit_id
+        WHERE so.user_id = $1
+        ORDER BY so.saved_at DESC`,
         [req.user.id]
       );
 
@@ -601,7 +606,6 @@ const outfitController = {
       const savedOutfits = result.rows.map((outfit) => ({
         ...outfit,
         items: outfit.items || [],
-        outfit_image: outfit.outfit_image || null,
       }));
 
       res.json(savedOutfits);
